@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:http/http.dart';
+import 'package:dio/dio.dart';
 import 'package:test/test.dart';
 import 'package:web3dart/crypto.dart';
 import 'package:web3dart/src/utils/rlp.dart' as rlp;
@@ -134,7 +134,7 @@ void main() {
         ),
       );
 
-      final client = Web3Client('', Client());
+      final client = Web3Client('', Dio());
       final signature =
           await client.signTransaction(credentials, transaction, chainId: 4);
 
@@ -200,7 +200,7 @@ void main() {
       value: EtherAmount.inWei(BigInt.from(10)),
     );
 
-    final client = Web3Client('', Client());
+    final client = Web3Client('', Dio());
     final signature = await client.signTransaction(credentials, transaction);
 
     expect(
@@ -223,7 +223,7 @@ void main() {
       value: EtherAmount.inWei(BigInt.from(1000000000000000000)),
     );
 
-    final client = Web3Client('', Client());
+    final client = Web3Client('', Dio());
     final signature = await client.signTransaction(credentials, transaction);
 
     expect(

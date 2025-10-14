@@ -25,7 +25,7 @@ class Web3Client {
   /// [httpClient] will be used to send requests to the rpc server.
   /// Am isolate will be used to perform expensive operations, such as signing
   /// transactions or computing private keys.
-  Web3Client(String url, Client httpClient, {SocketConnector? socketConnector})
+  Web3Client(String url, Dio httpClient, {SocketConnector? socketConnector})
       : this.custom(JsonRPC(url, httpClient), socketConnector: socketConnector);
 
   Web3Client.custom(RpcService rpc, {this.socketConnector}) : _jsonRpc = rpc {

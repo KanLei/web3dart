@@ -1,6 +1,6 @@
 // ignore_for_file: public_member_api_docs
 
-import 'package:http/http.dart';
+import 'package:dio/dio.dart';
 import 'package:web3dart/web3dart.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -59,7 +59,7 @@ Future<void> main() async {
   // http-polls. However, the socketConnector property is experimental.
   final client = Web3Client(
     rpcUrl,
-    Client(),
+    Dio(),
     socketConnector: () {
       return WebSocketChannel.connect(wsUrl).cast<String>();
     },
