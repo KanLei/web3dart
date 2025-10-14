@@ -3,7 +3,8 @@ library json_rpc;
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:http/http.dart';
+import 'package:dio/dio.dart';
+
 
 // ignore: one_member_abstracts
 
@@ -31,7 +32,7 @@ class JsonRPC extends RpcService {
   JsonRPC(String url, this.client) : super(url);
 
   /// Http client.
-  final Client client;
+  final Dio client;
 
   int _currentRequestId = 1;
 
@@ -54,12 +55,12 @@ class JsonRPC extends RpcService {
     };
 
     final response = await client.post(
-      Uri.parse(url),
-      headers: {'Content-Type': 'application/json'},
-      body: json.encode(requestPayload),
+      url,
+      options: Options(headers: {'Content-Type': 'application/json'}),
+      data: json.encode(requestPayload),
     );
 
-    final data = json.decode(response.body) as Map<String, dynamic>;
+    final data = response.data;
 
     if (data.containsKey('error')) {
       final error = data['error'];

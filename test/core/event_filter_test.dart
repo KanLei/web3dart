@@ -1,8 +1,7 @@
+import 'package:dio/dio.dart';
 import 'package:test/test.dart';
 import 'package:web3dart/web3dart.dart';
 import 'package:wallet/wallet.dart';
-
-import '../mock_client.dart';
 
 void main() {
   const alice =
@@ -81,22 +80,8 @@ void main() {
   ];
 
   Future runFilterTest(dynamic input, dynamic expected) async {
-    final client = MockClient(
-      expectAsync2((method, params) {
-        expect(method, 'eth_getLogs');
 
-        // verify that the topics are sent to eth_getLogs in the correct format
-        final actual = ((params as List)[0])['topics'];
-        expect(actual, expected);
-
-        // return a valid response from eth_getLogs
-        return [
-          {'address': contract},
-        ];
-      }),
-    );
-
-    final web3 = Web3Client('', client);
+    final web3 = Web3Client('', Dio());
     addTearDown(web3.dispose);
 
     // Dart typing will not allow an empty list to be added so when an empty

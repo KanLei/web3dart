@@ -1,6 +1,6 @@
 // ignore_for_file: public_member_api_docs
 
-import 'package:http/http.dart';
+import 'package:dio/dio.dart';
 import 'package:wallet/wallet.dart';
 import 'package:web3dart/web3dart.dart';
 
@@ -10,7 +10,7 @@ const String rpcUrl = 'http://localhost:7545';
 
 Future<void> main() async {
   // start a client we can use to send transactions
-  final client = Web3Client(rpcUrl, Client());
+  final client = Web3Client(rpcUrl, Dio());
 
   final credentials = EthPrivateKey.fromHex(privateKey);
   final address = credentials.address;
