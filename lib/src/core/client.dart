@@ -386,6 +386,45 @@ class Web3Client {
     );
   }
 
+  /// Signs a transaction from raw bytes and returns the signed transaction bytes
+  /// 
+  /// This method takes raw transaction bytes (RLP-encoded unsigned transaction)
+  /// and signs them using the provided credentials. It supports both legacy
+  /// transactions and EIP-1559 transactions.
+  /// 
+  /// [transactionBytes] - Raw RLP-encoded unsigned transaction bytes
+  /// [credentials] - The credentials to use for signing
+  /// [chainId] - The chain ID for the transaction (default: 1)
+  /// [isEIP1559] - Whether this is an EIP-1559 transaction (default: true)
+  /// 
+  /// Returns the signed transaction bytes ready for broadcast.
+  /// Throws [ArgumentError] if the transaction bytes are invalid.
+  /// 
+  /// Example:
+  /// ```dart
+  /// final unsignedBytes = Uint8List.fromList([...]);
+  /// final signedBytes = await client.signRawTransaction(
+  ///   unsignedBytes,
+  ///   credentials,
+  ///   chainId: 1,
+  ///   isEIP1559: true,
+  /// );
+  /// ```
+  Future<Uint8List> signRawTransaction(
+    Uint8List transactionBytes,
+    Credentials credentials, {
+    int? chainId = 1,
+    bool isEIP1559 = true,
+  }) async {
+    // Delegate to the implementation in transaction_signer.dart
+    return signTransactionBytes(
+      transactionBytes,
+      credentials,
+      chainId: chainId,
+      isEIP1559: isEIP1559,
+    );
+  }
+
   /// Calls a [function] defined in the smart [contract] and returns it's
   /// result.
   ///
