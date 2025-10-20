@@ -248,7 +248,7 @@ void main() {
         [1, 2, [3, 4]],
         'hello',
         [['nested', 'deep']],
-        42
+        42,
       ];
       final encoded = encode(original);
       final decoded = decode(encoded);

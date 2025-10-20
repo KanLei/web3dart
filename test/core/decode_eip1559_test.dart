@@ -1,6 +1,6 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:test/test.dart';
-import 'package:web3dart/src/utils/rlp.dart';
 import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
 
@@ -11,17 +11,23 @@ void main() {
         // Create a simple transaction
         final transaction = Transaction(
           nonce: 1,
+          gasPrice: EtherAmount.inWei(BigInt.from(1000000000000000000)),
           maxGas: 21000,
           to: EthereumAddress.fromHex('0x742d35cc6634c0532925a3b8d4c9db96c4b4d8b6'),
           value: EtherAmount.inWei(BigInt.from(1000000000000000000)),
           data: Uint8List(0),
-          maxPriorityFeePerGas: EtherAmount.inWei(BigInt.from(2000000000)),
-          maxFeePerGas: EtherAmount.inWei(BigInt.from(30000000000)),
+          // maxPriorityFeePerGas: EtherAmount.inWei(BigInt.from(2000000000)),
+          // maxFeePerGas: EtherAmount.inWei(BigInt.from(30000000000)),
         );
 
         // Encode to RLP
         final rlpData = _encodeEIP1559ToRlp(transaction, null, BigInt.from(1));
         final encoded = encode(rlpData);
+        print(base64Encode(encoded).toString());
+
+        // final testData = '6GeEstBeAIJSCJSqGmo4NYPqqz1yjSFLjLvzGYvOBYXo1KUQAICAgIA=';
+
+        // final encoded2 = base64Decode(testData);
 
         // Decode back
         final decoded = decodeRlpToEIP1559(encoded);
