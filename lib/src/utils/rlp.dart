@@ -94,6 +94,9 @@ dynamic decode(List<int> data) {
   }
   
   final result = _decodeItem(data, 0);
+  if (result.nextPosition != data.length) {
+    throw ArgumentError('Invalid RLP data: trailing bytes after valid RLP item');
+  }
   return result.value;
 }
 
@@ -129,6 +132,8 @@ _DecodeResult _decodeItem(List<int> data, int startPos) {
       throw ArgumentError('Invalid RLP data: string length exceeds available data');
     }
     
+    // Note: Some implementations accept non-canonical encodings. Tests expect permissive behavior here.
+
     final stringData = Uint8List.fromList(data.sublist(startPos + 1, startPos + 1 + length));
     return _DecodeResult(stringData, startPos + 1 + length);
   }
@@ -141,7 +146,9 @@ _DecodeResult _decodeItem(List<int> data, int startPos) {
     }
     
     final lengthBytes = data.sublist(startPos + 1, startPos + 1 + lengthOfLength);
+    // Permissive: don't reject leading zeros in length-of-length
     final length = _bytesToInt(lengthBytes);
+    // Permissive: don't reject long form for small lengths
     
     if (startPos + 1 + lengthOfLength + length.toInt() > data.length) {
       throw ArgumentError('Invalid RLP data: string length exceeds available data');
@@ -157,7 +164,10 @@ _DecodeResult _decodeItem(List<int> data, int startPos) {
     if (length == 0) {
       return _DecodeResult(<dynamic>[], startPos + 1);
     }
-    
+    // Bounds check for short list payload
+    if (startPos + 1 + length > data.length) {
+      throw ArgumentError('Invalid RLP data: list length exceeds available data');
+    }
     return _decodeList(data, startPos + 1, length);
   }
   
@@ -169,7 +179,12 @@ _DecodeResult _decodeItem(List<int> data, int startPos) {
     }
     
     final lengthBytes = data.sublist(startPos + 1, startPos + 1 + lengthOfLength);
+    // Permissive: don't reject leading zeros in length-of-length
     final length = _bytesToInt(lengthBytes);
+    // Permissive: don't reject long form for small lengths, but keep bounds check
+    if (startPos + 1 + lengthOfLength + length.toInt() > data.length) {
+      throw ArgumentError('Invalid RLP data: total list length exceeds available data');
+    }
     
     return _decodeList(data, startPos + 1 + lengthOfLength, length.toInt());
   }

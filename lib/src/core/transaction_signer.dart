@@ -138,8 +138,16 @@ Uint8List signTransactionBytes(
   bool isEIP1559 = true,
 }) {
   try {
+    // Detect typed transaction prefix for EIP-1559 (0x02)
+    Uint8List bytesToDecode = transactionBytes;
+    bool typedEip1559 = false;
+    if (transactionBytes.isNotEmpty && transactionBytes[0] == 0x02) {
+      typedEip1559 = true;
+      bytesToDecode = Uint8List.sublistView(transactionBytes, 1);
+    }
+
     // Decode the unsigned transaction bytes to get the transaction data
-    final decoded = rlp.decode(transactionBytes);
+    final decoded = rlp.decode(bytesToDecode);
     
     if (decoded is! List) {
       throw ArgumentError('Invalid transaction bytes: expected RLP list');
@@ -147,7 +155,7 @@ Uint8List signTransactionBytes(
     
     final list = decoded;
     
-    if (isEIP1559) {
+    if (isEIP1559 || typedEip1559) {
       return _signEIP1559FromBytes(list, credentials, chainId);
     } else {
       return _signLegacyFromBytes(list, credentials, chainId);
@@ -360,8 +368,13 @@ Future<EtherAmount> _getMaxFeePerGas(
 /// Throws [ArgumentError] if the RLP data is invalid or malformed.
 Transaction decodeRlpToEIP1559(List<int> rlpData) {
   try {
+    // Handle typed EIP-1559 (0x02) prefix if present
+    List<int> toDecode = rlpData;
+    if (rlpData.isNotEmpty && rlpData[0] == 0x02) {
+      toDecode = rlpData.sublist(1);
+    }
     // Decode the RLP data
-    final decoded = rlp.decode(rlpData);
+    final decoded = rlp.decode(toDecode);
     
     if (decoded is! List || decoded.length < 9) {
       throw ArgumentError('Invalid RLP data: expected list with at least 9 elements');

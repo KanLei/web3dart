@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:web3dart/crypto.dart';
-import 'package:web3dart/src/utils/rlp.dart';
+import 'package:web3dart/web3dart.dart';
 
 import 'rlp_test_vectors.dart' as data;
 
@@ -256,6 +256,104 @@ void main() {
       final list = decoded as List;
       expect(list.length, equals(4));
     });
+  });
+
+  test('decode base64 vector 6GeEstBeAIJSCJSqGmo4NYPqqz1yjSFLjLvzGYvOBYXo1KUQAICAgIA=', () {
+    // Base64 payload to decode
+    const b64 = '6GeEstBeAIJSCJSqGmo4NYPqqz1yjSFLjLvzGYvOBYXo1KUQAICAgIA=';
+    final bytes = base64Decode(b64);
+
+    final decoded = decode(bytes);
+    expect(decoded, isA<List>());
+    final list = decoded as List;
+    // Expect 9 elements (legacy tx-like layout with trailing empties)
+    expect(list.length, equals(9));
+
+    // gasLimit = 0x5208 (21000)
+    // element index 2 in legacy layout [nonce, gasPrice, gasLimit, to, value, data, v, r, s]
+    expect(list[2], equals(Uint8List.fromList([0x52, 0x08])));
+
+    // to = 20-byte address 0xaa1a6a383583eaab3d728d214b8cbbf3198bce05
+    expect(
+      list[3],
+      equals(
+        Uint8List.fromList([
+          0xaa, 0x1a, 0x6a, 0x38, 0x35, 0x83, 0xea, 0xab, 0x3d, 0x72,
+          0x8d, 0x21, 0x4b, 0x8c, 0xbb, 0xf3, 0x19, 0x8b, 0xce, 0x05,
+        ]),
+      ),
+    );
+
+    // trailing v, r, s, and possibly data are empty in this vector
+    expect(list[5], equals(Uint8List(0)));
+    expect(list[6], equals(Uint8List(0)));
+    expect(list[7], equals(Uint8List(0)));
+    expect(list[8], equals(Uint8List(0)));
+  });
+
+  test('decode base64 vector to Transaction (legacy)', () {
+    const b64 = '6GeEstBeAIJSCJSqGmo4NYPqqz1yjSFLjLvzGYvOBYXo1KUQAICAgIA=';
+    final bytes = base64Decode(b64);
+
+    final decoded = decode(bytes);
+    expect(decoded, isA<List>());
+    final list = decoded as List;
+
+    // Extract fields as legacy: [nonce, gasPrice, gasLimit, to, value, data, v, r, s]
+    int? _toInt(dynamic v) {
+      if (v is List && v.isEmpty) return 0;
+      if (v is int) return v;
+      if (v is List) {
+        BigInt acc = BigInt.zero;
+        for (final b in v.cast<int>()) {
+          acc = (acc << 8) + BigInt.from(b);
+        }
+        return acc.toInt();
+      }
+      return null;
+    }
+
+    BigInt? _toBigInt(dynamic v) {
+      if (v is List && v.isEmpty) return BigInt.zero;
+      if (v is int) return BigInt.from(v);
+      if (v is List) {
+        BigInt acc = BigInt.zero;
+        for (final b in v.cast<int>()) {
+          acc = (acc << 8) + BigInt.from(b);
+        }
+        return acc;
+      }
+      return null;
+    }
+
+    Uint8List _toBytes(dynamic v) {
+      if (v is List) return Uint8List.fromList(v.cast<int>());
+      if (v is int) return Uint8List.fromList([v]);
+      return Uint8List(0);
+    }
+
+    final nonce = _toInt(list[0]);
+    final gasPrice = _toBigInt(list[1]);
+    final gasLimit = _toInt(list[2]);
+    final toBytes = _toBytes(list[3]);
+    final value = _toBigInt(list[4]);
+    final dataBytes = _toBytes(list[5]);
+
+    final tx = Transaction(
+      nonce: nonce,
+      gasPrice: gasPrice != null ? EtherAmount.inWei(gasPrice) : null,
+      maxGas: gasLimit,
+      to: toBytes.isNotEmpty ? EthereumAddress(toBytes) : null,
+      value: value != null ? EtherAmount.inWei(value) : null,
+      data: dataBytes,
+    );
+
+    expect(tx.nonce, equals(103));
+    expect(tx.gasPrice?.getInWei, equals(BigInt.from(3000000000)));
+    expect(tx.maxGas, equals(21000));
+    expect(tx.to?.hex, equals('0xaa1a6a383583eaab3d728d214b8cbbf3198bce05'));
+    expect(tx.value?.getInWei, equals(BigInt.from(1000000000000)));
+    expect(tx.data, equals(Uint8List(0)));
   });
 }
 
