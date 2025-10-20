@@ -118,6 +118,150 @@ Uint8List signTransactionRaw(
   return uint8ListFromList(rlp.encode(_encodeToRlp(transaction, signature)));
 }
 
+/// Signs a transaction from raw bytes and returns the signed transaction bytes
+/// 
+/// This method takes raw transaction bytes (RLP-encoded unsigned transaction)
+/// and signs them using the provided credentials. It supports both legacy
+/// transactions and EIP-1559 transactions.
+/// 
+/// [transactionBytes] - Raw RLP-encoded unsigned transaction bytes
+/// [credentials] - The credentials to use for signing
+/// [chainId] - The chain ID for the transaction (default: 1)
+/// [isEIP1559] - Whether this is an EIP-1559 transaction (default: true)
+/// 
+/// Returns the signed transaction bytes ready for broadcast.
+/// Throws [ArgumentError] if the transaction bytes are invalid.
+Uint8List signTransactionBytes(
+  Uint8List transactionBytes,
+  Credentials credentials, {
+  int? chainId = 1,
+  bool isEIP1559 = true,
+}) {
+  try {
+    // Decode the unsigned transaction bytes to get the transaction data
+    final decoded = rlp.decode(transactionBytes);
+    
+    if (decoded is! List) {
+      throw ArgumentError('Invalid transaction bytes: expected RLP list');
+    }
+    
+    final list = decoded;
+    
+    if (isEIP1559) {
+      return _signEIP1559FromBytes(list, credentials, chainId);
+    } else {
+      return _signLegacyFromBytes(list, credentials, chainId);
+    }
+    
+  } catch (e) {
+    throw ArgumentError('Failed to sign transaction bytes: $e');
+  }
+}
+
+/// Signs an EIP-1559 transaction from decoded RLP data
+Uint8List _signEIP1559FromBytes(List<dynamic> rlpData, Credentials credentials, int? chainId) {
+  if (rlpData.length < 9) {
+    throw ArgumentError('Invalid EIP-1559 transaction: insufficient fields');
+  }
+  
+  // Extract transaction fields from RLP data
+  final nonce = _extractBigInt(rlpData[1]);
+  final maxPriorityFeePerGas = _extractBigInt(rlpData[2]);
+  final maxFeePerGas = _extractBigInt(rlpData[3]);
+  final gasLimit = _extractBigInt(rlpData[4]);
+  
+  // Extract recipient address
+  EthereumAddress? to;
+  if (rlpData[5] is List && rlpData[5].isNotEmpty) {
+    final addressBytes = _extractBytes(rlpData[5]);
+    if (addressBytes.isNotEmpty) {
+      to = EthereumAddress(addressBytes);
+    }
+  }
+  
+  // Extract value and data
+  final value = _extractBigInt(rlpData[6]);
+  final data = _extractBytes(rlpData[7]);
+  
+  // Create transaction object
+  final transaction = Transaction(
+    nonce: nonce?.toInt(),
+    maxGas: gasLimit?.toInt(),
+    to: to,
+    value: value != null ? EtherAmount.inWei(value) : EtherAmount.zero(),
+    data: data,
+    maxPriorityFeePerGas: maxPriorityFeePerGas != null 
+        ? EtherAmount.inWei(maxPriorityFeePerGas) 
+        : null,
+    maxFeePerGas: maxFeePerGas != null 
+        ? EtherAmount.inWei(maxFeePerGas) 
+        : null,
+  );
+  
+  // Get the unsigned serialized transaction for signing
+  final unsignedSerialized = transaction.getUnsignedSerialized(chainId: chainId);
+  
+  // Sign the transaction
+  final signature = credentials.signToEcSignature(
+    unsignedSerialized, 
+    chainId: chainId, 
+    isEIP1559: true,
+  );
+  
+  // Encode the signed transaction
+  final signedRlp = _encodeEIP1559ToRlp(transaction, signature, BigInt.from(chainId ?? 1));
+  return uint8ListFromList(rlp.encode(signedRlp));
+}
+
+/// Signs a legacy transaction from decoded RLP data
+Uint8List _signLegacyFromBytes(List<dynamic> rlpData, Credentials credentials, int? chainId) {
+  if (rlpData.length < 6) {
+    throw ArgumentError('Invalid legacy transaction: insufficient fields');
+  }
+  
+  // Extract transaction fields from RLP data
+  final nonce = _extractBigInt(rlpData[0]);
+  final gasPrice = _extractBigInt(rlpData[1]);
+  final gasLimit = _extractBigInt(rlpData[2]);
+  
+  // Extract recipient address
+  EthereumAddress? to;
+  if (rlpData[3] is List && rlpData[3].isNotEmpty) {
+    final addressBytes = _extractBytes(rlpData[3]);
+    if (addressBytes.isNotEmpty) {
+      to = EthereumAddress(addressBytes);
+    }
+  }
+  
+  // Extract value and data
+  final value = _extractBigInt(rlpData[4]);
+  final data = _extractBytes(rlpData[5]);
+  
+  // Create transaction object
+  final transaction = Transaction(
+    nonce: nonce?.toInt(),
+    gasPrice: gasPrice != null ? EtherAmount.inWei(gasPrice) : null,
+    maxGas: gasLimit?.toInt(),
+    to: to,
+    value: value != null ? EtherAmount.inWei(value) : EtherAmount.zero(),
+    data: data,
+  );
+  
+  // Get the unsigned serialized transaction for signing
+  final unsignedSerialized = transaction.getUnsignedSerialized(chainId: chainId);
+  
+  // Sign the transaction
+  final signature = credentials.signToEcSignature(
+    unsignedSerialized, 
+    chainId: chainId, 
+    isEIP1559: false,
+  );
+  
+  // Encode the signed transaction
+  final signedRlp = _encodeToRlp(transaction, signature);
+  return uint8ListFromList(rlp.encode(signedRlp));
+}
+
 List<dynamic> _encodeEIP1559ToRlp(
   Transaction transaction,
   MsgSignature? signature,
@@ -202,4 +346,124 @@ Future<EtherAmount> _getMaxFeePerGas(
   return EtherAmount.inWei(
     baseFeePerGas.getInWei * BigInt.from(2) + maxPriorityFeePerGas,
   );
+}
+
+/// Decodes RLP-encoded EIP-1559 transaction data back to a Transaction object
+/// 
+/// This function parses the RLP-encoded transaction data and reconstructs
+/// the original Transaction object with all its fields populated.
+/// 
+/// The RLP structure for EIP-1559 transactions is:
+/// [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, v, r, s]
+/// 
+/// Returns a [Transaction] object with all fields populated from the RLP data.
+/// Throws [ArgumentError] if the RLP data is invalid or malformed.
+Transaction decodeRlpToEIP1559(List<int> rlpData) {
+  try {
+    // Decode the RLP data
+    final decoded = rlp.decode(rlpData);
+    
+    if (decoded is! List || decoded.length < 9) {
+      throw ArgumentError('Invalid RLP data: expected list with at least 9 elements');
+    }
+    
+    final list = decoded;
+    
+    // Extract basic transaction fields
+    final nonce = _extractBigInt(list[1]);
+    final maxPriorityFeePerGas = _extractBigInt(list[2]);
+    final maxFeePerGas = _extractBigInt(list[3]);
+    final gasLimit = _extractBigInt(list[4]);
+    
+    // Extract recipient address
+    EthereumAddress? to;
+    if (list[5] is List && list[5].isNotEmpty) {
+      final addressBytes = _extractBytes(list[5]);
+      if (addressBytes.isNotEmpty) {
+        to = EthereumAddress(addressBytes);
+      }
+    }
+    
+    // Extract value
+    final value = _extractBigInt(list[6]);
+    
+    // Extract data
+    final data = _extractBytes(list[7]);
+    
+    // Extract access list (currently not used in Transaction class)
+    // final accessList = list[8] as List;
+    
+    // Extract signature if present (currently not used in return value)
+    if (list.length >= 12) {
+      final v = _extractBigInt(list[9]);
+      final r = _extractBigInt(list[10]);
+      final s = _extractBigInt(list[11]);
+      
+      if (v != null && r != null && s != null) {
+        // Signature is available but not stored in Transaction object
+        // Could be used for signature verification in the future
+      }
+    }
+    
+    // Create and return the transaction
+    return Transaction(
+      nonce: nonce?.toInt(),
+      maxGas: gasLimit?.toInt(),
+      to: to,
+      value: value != null ? EtherAmount.inWei(value) : EtherAmount.zero(),
+      data: data,
+      maxPriorityFeePerGas: maxPriorityFeePerGas != null 
+          ? EtherAmount.inWei(maxPriorityFeePerGas) 
+          : null,
+      maxFeePerGas: maxFeePerGas != null 
+          ? EtherAmount.inWei(maxFeePerGas) 
+          : null,
+    );
+    
+  } catch (e) {
+    throw ArgumentError('Failed to decode RLP data: $e');
+  }
+}
+
+/// Extracts a BigInt from RLP decoded data
+BigInt? _extractBigInt(dynamic data) {
+  if (data == null) return null;
+  
+  if (data is List) {
+    if (data.isEmpty) return BigInt.zero;
+    // Convert bytes to BigInt
+    return _bytesToBigInt(data.cast<int>());
+  }
+  
+  if (data is int) {
+    return BigInt.from(data);
+  }
+  
+  return null;
+}
+
+/// Extracts bytes from RLP decoded data
+Uint8List _extractBytes(dynamic data) {
+  if (data == null) return Uint8List(0);
+  
+  if (data is List) {
+    return Uint8List.fromList(data.cast<int>());
+  }
+  
+  if (data is int) {
+    return Uint8List.fromList([data]);
+  }
+  
+  return Uint8List(0);
+}
+
+/// Converts a byte array to BigInt
+BigInt _bytesToBigInt(List<int> bytes) {
+  if (bytes.isEmpty) return BigInt.zero;
+  
+  BigInt result = BigInt.zero;
+  for (final byte in bytes) {
+    result = (result << 8) + BigInt.from(byte);
+  }
+  return result;
 }

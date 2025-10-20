@@ -86,3 +86,134 @@ List<int> encode(dynamic value) {
 
   return builder.asBytes();
 }
+
+/// Decodes RLP-encoded data back to its original form
+dynamic decode(List<int> data) {
+  if (data.isEmpty) {
+    throw ArgumentError('Cannot decode empty RLP data');
+  }
+  
+  final result = _decodeItem(data, 0);
+  return result.value;
+}
+
+/// Result of decoding an RLP item, containing the decoded value and the next position
+class _DecodeResult {
+  _DecodeResult(this.value, this.nextPosition);
+  
+  final dynamic value;
+  final int nextPosition;
+}
+
+/// Decodes a single RLP item from the given data starting at the specified position
+_DecodeResult _decodeItem(List<int> data, int startPos) {
+  if (startPos >= data.length) {
+    throw ArgumentError('Invalid RLP data: unexpected end');
+  }
+  
+  final firstByte = data[startPos];
+  
+  // Single byte string (0x00-0x7f)
+  if (firstByte <= 0x7f) {
+    return _DecodeResult(Uint8List.fromList([firstByte]), startPos + 1);
+  }
+  
+  // Short string (0x80-0xb7)
+  if (firstByte <= 0xb7) {
+    final length = firstByte - 0x80;
+    if (length == 0) {
+      return _DecodeResult(Uint8List(0), startPos + 1);
+    }
+    
+    if (startPos + 1 + length > data.length) {
+      throw ArgumentError('Invalid RLP data: string length exceeds available data');
+    }
+    
+    final stringData = Uint8List.fromList(data.sublist(startPos + 1, startPos + 1 + length));
+    return _DecodeResult(stringData, startPos + 1 + length);
+  }
+  
+  // Long string (0xb8-0xbf)
+  if (firstByte <= 0xbf) {
+    final lengthOfLength = firstByte - 0xb7;
+    if (startPos + 1 + lengthOfLength > data.length) {
+      throw ArgumentError('Invalid RLP data: length encoding exceeds available data');
+    }
+    
+    final lengthBytes = data.sublist(startPos + 1, startPos + 1 + lengthOfLength);
+    final length = _bytesToInt(lengthBytes);
+    
+    if (startPos + 1 + lengthOfLength + length.toInt() > data.length) {
+      throw ArgumentError('Invalid RLP data: string length exceeds available data');
+    }
+    
+    final stringData = Uint8List.fromList(data.sublist(startPos + 1 + lengthOfLength, startPos + 1 + lengthOfLength + length.toInt()));
+    return _DecodeResult(stringData, startPos + 1 + lengthOfLength + length.toInt());
+  }
+  
+  // Short list (0xc0-0xf7)
+  if (firstByte <= 0xf7) {
+    final length = firstByte - 0xc0;
+    if (length == 0) {
+      return _DecodeResult(<dynamic>[], startPos + 1);
+    }
+    
+    return _decodeList(data, startPos + 1, length);
+  }
+  
+  // Long list (0xf8-0xff)
+  if (firstByte <= 0xff) {
+    final lengthOfLength = firstByte - 0xf7;
+    if (startPos + 1 + lengthOfLength > data.length) {
+      throw ArgumentError('Invalid RLP data: list length encoding exceeds available data');
+    }
+    
+    final lengthBytes = data.sublist(startPos + 1, startPos + 1 + lengthOfLength);
+    final length = _bytesToInt(lengthBytes);
+    
+    return _decodeList(data, startPos + 1 + lengthOfLength, length.toInt());
+  }
+  
+  throw ArgumentError('Invalid RLP data: unknown prefix byte 0x${firstByte.toRadixString(16)}');
+}
+
+/// Decodes a list of RLP items
+_DecodeResult _decodeList(List<int> data, int startPos, int totalLength) {
+  final items = <dynamic>[];
+  int currentPos = startPos;
+  final endPos = startPos + totalLength;
+  
+  while (currentPos < endPos) {
+    final result = _decodeItem(data, currentPos);
+    items.add(result.value);
+    currentPos = result.nextPosition;
+  }
+  
+  if (currentPos != endPos) {
+    throw ArgumentError('Invalid RLP data: list length mismatch');
+  }
+  
+  return _DecodeResult(items, currentPos);
+}
+
+/// Converts a byte array to a big integer
+BigInt _bytesToInt(List<int> bytes) {
+  if (bytes.isEmpty) return BigInt.zero;
+  
+  // Prevent excessive length encoding (more than 4 bytes is unreasonable for RLP)
+  if (bytes.length > 4) {
+    throw ArgumentError('Invalid RLP data: length encoding too long');
+  }
+  
+  BigInt result = BigInt.zero;
+  for (final byte in bytes) {
+    result = (result << 8) + BigInt.from(byte);
+  }
+  
+  // Prevent unreasonably large lengths
+  if (result > BigInt.from(1000000)) { // 1MB limit
+    throw ArgumentError('Invalid RLP data: length too large');
+  }
+  
+  return result;
+}
