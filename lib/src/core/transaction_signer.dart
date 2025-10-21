@@ -1,5 +1,13 @@
 part of 'package:web3dart/web3dart.dart';
 
+/// Transaction types according to EIP-2718
+enum TransactionType {
+  legacy,  // No prefix
+  type0,   // 0x00 prefix - Legacy with chainId
+  type1,   // 0x01 prefix - EIP-2930 access list transaction
+  type2,   // 0x02 prefix - EIP-1559 transaction
+}
+
 class _SigningInput {
   _SigningInput({
     required this.transaction,
@@ -182,7 +190,7 @@ Uint8List _signEIP1559FromBytes(List<dynamic> rlpData, Credentials credentials, 
   EthereumAddress? to;
   if (rlpData[5] is List && rlpData[5].isNotEmpty) {
     final addressBytes = _extractBytes(rlpData[5]);
-    if (addressBytes.isNotEmpty) {
+    if (addressBytes.isNotEmpty && addressBytes.length == 20) {
       to = EthereumAddress(addressBytes);
     }
   }
@@ -236,7 +244,7 @@ Uint8List _signLegacyFromBytes(List<dynamic> rlpData, Credentials credentials, i
   EthereumAddress? to;
   if (rlpData[3] is List && rlpData[3].isNotEmpty) {
     final addressBytes = _extractBytes(rlpData[3]);
-    if (addressBytes.isNotEmpty) {
+    if (addressBytes.isNotEmpty && addressBytes.length == 20) {
       to = EthereumAddress(addressBytes);
     }
   }
@@ -479,4 +487,303 @@ BigInt _bytesToBigInt(List<int> bytes) {
     result = (result << 8) + BigInt.from(byte);
   }
   return result;
+}
+
+/// Determines transaction type based on EIP-2718 prefix identifier
+/// This is the standard and most reliable method for transaction type detection
+TransactionType _determineTransactionTypeFromPrefix(List<int> rlpData) {
+  if (rlpData.isEmpty) {
+    throw ArgumentError('Empty transaction data');
+  }
+  
+  final firstByte = rlpData[0];
+  
+  // EIP-2718 standard transaction type prefixes
+  if (firstByte == 0x00) {
+    return TransactionType.type0;  // Legacy with chainId
+  } else if (firstByte == 0x01) {
+    return TransactionType.type1;  // EIP-2930 access list transaction
+  } else if (firstByte == 0x02) {
+    return TransactionType.type2;  // EIP-1559 transaction
+  } else if (firstByte < 0x80) {
+    // Legacy transaction (first byte < 0x80)
+    return TransactionType.legacy;
+  } else if (firstByte >= 0xc0) {
+    // RLP list prefix (0xc0+), could be legacy or untyped EIP-1559
+    return _determineTransactionTypeFromRLPStructure(rlpData);
+  } else {
+    throw ArgumentError('Invalid transaction format: unknown transaction type prefix 0x${firstByte.toRadixString(16).padLeft(2, '0')}');
+  }
+}
+
+/// Determines transaction type from RLP structure when no typed envelope is present
+/// This is used as fallback for RLP-encoded data without EIP-2718 prefixes
+TransactionType _determineTransactionTypeFromRLPStructure(List<int> rlpData) {
+  try {
+    final decoded = rlp.decode(rlpData);
+    if (decoded is! List) {
+      throw ArgumentError('Invalid RLP data: expected list');
+    }
+    
+    final list = decoded;
+    
+    // Check for EIP-1559 indicators first
+    if (_hasEIP1559Indicators(list)) {
+      return TransactionType.type2;
+    }
+    
+    // Otherwise, it's a legacy transaction
+    return TransactionType.legacy;
+  } catch (e) {
+    throw ArgumentError('Invalid transaction format: $e');
+  }
+}
+
+/// Checks if the RLP structure has EIP-1559 indicators
+/// EIP-1559 transactions have chainId as first field and maxPriorityFeePerGas/maxFeePerGas
+bool _hasEIP1559Indicators(List<dynamic> rlpData) {
+  if (rlpData.length < 9) return false;
+  
+  try {
+    // Check if first field looks like a chainId (reasonable range)
+    final chainId = _extractBigInt(rlpData[0]);
+    if (chainId == null || chainId <= BigInt.zero || chainId > BigInt.from(1000000)) {
+      return false;
+    }
+    
+    // Check if we have maxPriorityFeePerGas and maxFeePerGas fields
+    if (rlpData.length >= 4) {
+      final maxPriorityFeePerGas = _extractBigInt(rlpData[2]);
+      final maxFeePerGas = _extractBigInt(rlpData[3]);
+      
+      if (maxPriorityFeePerGas == null || maxFeePerGas == null) {
+        return false;
+      }
+      
+      // EIP-1559 constraint: maxFeePerGas >= maxPriorityFeePerGas
+      if (maxFeePerGas < maxPriorityFeePerGas) {
+        return false;
+      }
+      
+      // Check if both are reasonable gas fee values
+      if (maxPriorityFeePerGas > BigInt.from(1000000000000) || maxFeePerGas > BigInt.from(1000000000000)) {
+        return false;
+      }
+      
+      return true;
+    }
+    
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+
+
+
+
+
+
+/// Decodes RLP-encoded transaction data back to a Transaction object
+/// 
+/// This function automatically detects the transaction format using EIP-2718 standard
+/// and parses the RLP-encoded transaction data accordingly.
+/// 
+/// Supports transaction formats according to EIP-2718:
+/// - Legacy: No prefix, [nonce, gasPrice, gasLimit, to, value, data, v, r, s]
+/// - Type 0: 0x00 prefix, [nonce, gasPrice, gasLimit, to, value, data, v, r, s] (with chainId)
+/// - Type 1: 0x01 prefix, [chainId, nonce, gasPrice, gasLimit, to, value, data, accessList, v, r, s] (EIP-2930)
+/// - Type 2: 0x02 prefix, [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, v, r, s] (EIP-1559)
+/// 
+/// Returns a [Transaction] object with all fields populated from the RLP data.
+/// Throws [ArgumentError] if the RLP data is invalid or malformed.
+Transaction decodeRlpToTransaction(List<int> rlpData) {
+  try {
+    if (rlpData.isEmpty) {
+      throw ArgumentError('Empty transaction data');
+    }
+    
+    // Determine transaction type using EIP-2718 prefix identifier
+    final transactionType = _determineTransactionTypeFromPrefix(rlpData);
+    
+    // Extract the RLP data to decode based on transaction type
+    List<int> toDecode;
+    if (transactionType == TransactionType.type0 || 
+        transactionType == TransactionType.type1 || 
+        transactionType == TransactionType.type2) {
+      // Typed transactions: remove the prefix byte
+      toDecode = rlpData.sublist(1);
+    } else {
+      // Legacy transactions: use the entire RLP data
+      toDecode = rlpData;
+    }
+    
+    // Decode the RLP data
+    final decoded = rlp.decode(toDecode);
+    
+    if (decoded is! List) {
+      throw ArgumentError('Invalid RLP data: expected list');
+    }
+    
+    final list = decoded;
+    
+    // Route to appropriate decoder based on transaction type
+    switch (transactionType) {
+      case TransactionType.legacy:
+        return _decodeLegacyTransaction(list);
+      case TransactionType.type0:
+        return _decodeLegacyTransaction(list); // Same as legacy but with chainId
+      case TransactionType.type1:
+        return _decodeType1Transaction(list); // EIP-2930 access list transaction
+      case TransactionType.type2:
+        return _decodeEIP1559Transaction(list); // EIP-1559 transaction
+    }
+    
+  } catch (e) {
+    throw ArgumentError('Failed to decode transaction: $e');
+  }
+}
+
+/// Decodes a legacy transaction from RLP data
+/// Legacy structure: [nonce, gasPrice, gasLimit, to, value, data, v?, r?, s?]
+/// Signature fields (v, r, s) are optional and can be null for unsigned transactions
+Transaction _decodeLegacyTransaction(List<dynamic> rlpData) {
+  // Extract transaction fields from RLP data
+  final nonce = _extractBigInt(rlpData[0]);
+  final gasPrice = _extractBigInt(rlpData[1]);
+  final gasLimit = _extractBigInt(rlpData[2]);
+  
+  // Extract recipient address
+  EthereumAddress? to;
+  if (rlpData[3] is List && rlpData[3].isNotEmpty) {
+    final addressBytes = _extractBytes(rlpData[3]);
+    if (addressBytes.isNotEmpty && addressBytes.length == 20) {
+      to = EthereumAddress(addressBytes);
+    }
+  }
+  
+  // Extract value and data
+  final value = _extractBigInt(rlpData[4]);
+  final data = _extractBytes(rlpData[5]);
+  
+  // Extract signature if present (nullable fields)
+  // Note: Signature fields are not stored in Transaction object
+  // as Transaction class doesn't support signature fields
+  // They could be used for signature verification in the future
+  if (rlpData.length >= 9) {
+    // Signature fields are available but not stored in Transaction object
+    // They could be used for signature verification in the future
+    // final v = _extractBigInt(rlpData[6]);
+    // final r = _extractBigInt(rlpData[7]);
+    // final s = _extractBigInt(rlpData[8]);
+  }
+  
+  // Create and return the transaction
+  return Transaction(
+    nonce: nonce?.toInt(),
+    gasPrice: gasPrice != null ? EtherAmount.inWei(gasPrice) : null,
+    maxGas: gasLimit?.toInt(),
+    to: to,
+    value: value != null ? EtherAmount.inWei(value) : EtherAmount.zero(),
+    data: data,
+  );
+}
+
+/// Decodes a Type 1 (EIP-2930) access list transaction from RLP data
+Transaction _decodeType1Transaction(List<dynamic> rlpData) {
+  if (rlpData.length < 8) {
+    throw ArgumentError('Invalid Type 1 transaction: insufficient fields');
+  }
+  
+  // Extract transaction fields from RLP data
+  // Type 1: [chainId, nonce, gasPrice, gasLimit, to, value, data, accessList, v, r, s]
+  final nonce = _extractBigInt(rlpData[1]);
+  final gasPrice = _extractBigInt(rlpData[2]);
+  final gasLimit = _extractBigInt(rlpData[3]);
+  
+  // Extract recipient address
+  EthereumAddress? to;
+  if (rlpData[4] is List && rlpData[4].isNotEmpty) {
+    final addressBytes = _extractBytes(rlpData[4]);
+    if (addressBytes.isNotEmpty) {
+      to = EthereumAddress(addressBytes);
+    }
+  }
+  
+  // Extract value and data
+  final value = _extractBigInt(rlpData[5]);
+  final data = _extractBytes(rlpData[6]);
+  
+  // Extract access list (currently not used in Transaction class)
+  // final accessList = rlpData[7] as List;
+  
+  // Create and return the transaction
+  return Transaction(
+    nonce: nonce?.toInt(),
+    gasPrice: gasPrice != null ? EtherAmount.inWei(gasPrice) : null,
+    maxGas: gasLimit?.toInt(),
+    to: to,
+    value: value != null ? EtherAmount.inWei(value) : EtherAmount.zero(),
+    data: data,
+  );
+}
+
+/// Decodes an EIP-1559 transaction from RLP data
+Transaction _decodeEIP1559Transaction(List<dynamic> rlpData) {
+  if (rlpData.length < 9) {
+    throw ArgumentError('Invalid EIP-1559 transaction: insufficient fields');
+  }
+  
+  // EIP-1559 structure: [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, v?, r?, s?]
+  // Signature fields (v, r, s) are optional and can be null for unsigned transactions
+  
+  // Extract basic transaction fields
+  final nonce = _extractBigInt(rlpData[1]);
+  final maxPriorityFeePerGas = _extractBigInt(rlpData[2]);
+  final maxFeePerGas = _extractBigInt(rlpData[3]);
+  final gasLimit = _extractBigInt(rlpData[4]);
+  
+  // Extract recipient address
+  EthereumAddress? to;
+  if (rlpData[5] is List && rlpData[5].isNotEmpty) {
+    final addressBytes = _extractBytes(rlpData[5]);
+    if (addressBytes.isNotEmpty && addressBytes.length == 20) {
+      to = EthereumAddress(addressBytes);
+    }
+  }
+  
+  // Extract value and data
+  final value = _extractBigInt(rlpData[6]);
+  final data = _extractBytes(rlpData[7]);
+  
+  // Extract access list (currently not used in Transaction class)
+  // final accessList = rlpData[8] as List;
+  
+  // Extract signature if present (nullable fields)
+  // Note: Signature fields are not stored in Transaction object
+  // as Transaction class doesn't support signature fields
+  // They could be used for signature verification in the future
+  if (rlpData.length >= 12) {
+    // Signature fields are available but not stored in Transaction object
+    // They could be used for signature verification in the future
+    // final v = _extractBigInt(rlpData[9]);
+    // final r = _extractBigInt(rlpData[10]);
+    // final s = _extractBigInt(rlpData[11]);
+  }
+  
+  // Create and return the transaction
+  return Transaction(
+    nonce: nonce?.toInt(),
+    maxGas: gasLimit?.toInt(),
+    to: to,
+    value: value != null ? EtherAmount.inWei(value) : EtherAmount.zero(),
+    data: data,
+    maxPriorityFeePerGas: maxPriorityFeePerGas != null 
+        ? EtherAmount.inWei(maxPriorityFeePerGas) 
+        : null,
+    maxFeePerGas: maxFeePerGas != null 
+        ? EtherAmount.inWei(maxFeePerGas) 
+        : null,
+  );
 }
